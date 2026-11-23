@@ -1,0 +1,12 @@
+# Local credentials
+client_secret*.json
+
+# Runtime logs
+app_stdout.txt
+app_stderr.txt
+
+# Local configuration and caches
+control.json
+__pycache__/
+*.py[cod]
+hypecut.egg-info/
