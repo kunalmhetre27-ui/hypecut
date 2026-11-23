@@ -45,6 +45,14 @@ class Settings:
     gemini_model: str = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash,gemini-2.5-flash-lite")  # tried in order
     flow_prompts: bool = True         # write a ready-to-paste Google Flow prompt per clip
 
+    # --- YouTube auto-upload (see youtube.py) -------------------------------
+    youtube_upload: bool = False      # CLI: upload finished clips after a run
+    youtube_visibility: str = "public"  # private | unlisted | public (default: public posts)
+    youtube_category: str = "20"      # YouTube category id (20 = Gaming)
+    youtube_schedule: bool = False    # CLI: upload as scheduled at the best times
+    youtube_slots: str = "12:00,15:00,18:00,21:30"  # local post times
+    youtube_min_gap: int = 45         # minutes between two scheduled uploads
+
     # --- live mode -----------------------------------------------------------
     segment_seconds: int = 6          # rolling buffer segment size
     buffer_minutes: float = 10.0      # how much stream video to keep on disk

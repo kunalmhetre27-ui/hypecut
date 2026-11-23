@@ -119,6 +119,9 @@ Chat log formats for local files: `.jsonl` (`{"t": 12.3, "user": "x", "text": "K
 | `--no-effects` / `--no-hook` / `--no-title` | | Turn off punch-zoom + chat pop-ups / hook card / title bar |
 | `--no-gemini` / `--no-flow` | | Skip the AI step / the Flow prompts |
 | `--sync-offset` | 0 | Seconds to add to chat times if chat and video drift apart |
+| `--youtube-upload` | off | Upload the finished clips to YouTube after the run (VOD and live mode) |
+| `--youtube-visibility` | unlisted | `private`, `unlisted` or `public` |
+| `--youtube-category` | 20 | YouTube category id (20 = Gaming) |
 
 All settings live in `hypecut/config.py`. Hype words and their weights are in `hypecut/spikes.py` (`HYPE_WORDS`); add your community's emotes there.
 
@@ -128,6 +131,37 @@ All settings live in `hypecut/config.py`. Hype words and their weights are in `h
 2. **Window:** 20 s before the chat peak to 10 s after.
 3. **Best cut:** Whisper transcribes the window with word timings. Every start/end at a sentence edge or pause is tried. Score = 50% chat hype inside the cut (shifted back by the reaction delay) + 30% loudness + 20% how much of it has speech. The cut must contain the moment.
 4. **Hook + caption:** Gemini ranks the clips and writes the hook, title, caption and hashtags. Without a key, offline rules turn what chat spammed (gator, 5 stars, wasted...) into the hook. Every hook gets a 0–100 score; the clip gets a 0–100 viral score (chat spike 55%, cut 20%, hook 25%).
+
+## YouTube auto-upload (Shorts)
+
+After a run finishes, HypeCut can upload every clip straight to YouTube — title
+from Gemini, caption + hashtags in the description, tags from the hashtags,
+category Gaming, and privacy `unlisted` by default (switch to `public` when
+you're ready). 15–30 s vertical clips become YouTube **Shorts** automatically.
+
+**One-time setup (free, ~5 minutes):**
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/) and create a project.
+2. **APIs & Services → Library** → search **YouTube Data API v3** → **Enable**.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID** →
+   Application type: **Desktop app** → Create.
+4. Copy the **client ID** and **client secret** into the app's
+   **Settings → YouTube auto-upload**, press **Connect YouTube**, and sign in
+   with the Google account that owns the channel you want to upload to.
+5. Pick a visibility, optionally tick **Auto-upload after every run**, and save.
+
+From the terminal the same thing works with flags:
+
+```bash
+hypecut "https://www.youtube.com/watch?v=XXXX" --out clips/ --youtube-upload --youtube-visibility public
+```
+
+- Uploads are resumable and show up in the run's log. Each clip is only
+  uploaded once: the result is written back into its `clip_XX.json`.
+- In **My clips**, a **⬆ YouTube** button uploads that one clip; once uploaded
+  it becomes a **▶ YouTube** link.
+- Credits go to the streamer: the description always includes the source link,
+  and the default visibility is `unlisted` so nothing goes public by accident.
 
 ## Gemini and Google Flow
 

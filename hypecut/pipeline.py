@@ -93,7 +93,11 @@ def run(spikes: list[Spike], resolve: Resolver, msgs: list[ChatMessage], out: Pa
     work.mkdir(exist_ok=True)
     clips = []
     for i, sp in enumerate(spikes, 1):
-        src, off = resolve(sp)
+        try:
+            src, off = resolve(sp)
+        except Exception as e:  # noqa: BLE001 - a moment whose window can't be downloaded is skipped
+            print(f"[warn] moment {i} skipped (couldn't download its window): {e}", flush=True)
+            continue
         print(f"[progress] analysing clip {i}/{len(spikes)}", flush=True)
         try:
             clips.append(analyse_spike(i, sp, src, off, msgs, work, s, all_words))

@@ -5,3 +5,6 @@ pywebview>=5.0        # the app window
 opencv-python-headless>=4.8,<5  # face tracking
 chat-downloader>=0.2.8  # Twitch/YouTube chat
 streamlink>=6.0        # live streams
+google-api-python-client>=2.120   # YouTube auto-upload (OAuth + Data API v3)
+google-auth-oauthlib>=1.2         # OAuth 2.0 loopback flow
+google-auth-httplib2>=0.2         # transport for the YouTube client

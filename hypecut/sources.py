@@ -23,6 +23,33 @@ def _ytdlp() -> list[str]:
     return ["yt-dlp"] if shutil.which("yt-dlp") else [sys.executable, "-m", "yt_dlp"]
 
 
+def _ytdlp_run(args: list[str], tries: int = 3) -> None:
+    """Run yt-dlp with retries and print its stderr on failure.
+
+    YouTube's section downloads (--download-sections) intermittently fail with
+    throttling / network errors even when the video is fine, so we retry a few
+    times. The stderr is logged because the desktop app runs via pythonw.exe,
+    which has no console and would otherwise swallow the real error message.
+    """
+    for attempt in range(1, tries + 1):
+        try:
+            subprocess.run(_ytdlp() + args, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", check=True)
+            return
+        except subprocess.CalledProcessError as e:
+            err = (e.stderr or "").strip()
+            print(f"[vod] yt-dlp failed (attempt {attempt}/{tries}): {err[-500:]}", flush=True)
+            if attempt < tries:
+                time.sleep(2 * attempt)
+    raise
+
+
+def _dl_flags() -> list[str]:
+    """Resilience flags for YouTube downloads (throttling / flaky networks)."""
+    return ["--retries", "10", "--fragment-retries", "10", "--extractor-retries", "3",
+            "--socket-timeout", "30"]
+
+
 # ---------------------------------------------------------------- VOD
 def vod_resolver(url: str, work: Path):
     """Download just the window around each spike (yt-dlp --download-sections)."""
@@ -31,9 +58,9 @@ def vod_resolver(url: str, work: Path):
         out = work / f"vod_{int(a)}_{int(b)}.mp4"
         if not out.exists():
             print(f"[vod] downloading {a:.0f}s-{b:.0f}s ...")
-            subprocess.run(_ytdlp() + ["-q", "--no-warnings", "-f", "bv*[height<=720]+ba/b[height<=720]/b",
-                                       "--download-sections", f"*{a:.0f}-{b:.0f}", "--force-keyframes-at-cuts",
-                                       "--merge-output-format", "mp4", "-o", str(out), url], check=True)
+            _ytdlp_run(["-q", "--no-warnings", "-f", "bv*[height<=720]+ba/b[height<=720]/b",
+                        "--download-sections", f"*{a:.0f}-{b:.0f}", "--force-keyframes-at-cuts",
+                        "--merge-output-format", "mp4", * _dl_flags(), "-o", str(out), url])
         return str(out), a
     return resolve
 
@@ -45,8 +72,8 @@ def download_full(url: str, work: Path) -> str:
     if found:
         return str(found[0])
     print("[vod] no chat: downloading a small copy of the video to analyse it ...", flush=True)
-    subprocess.run(_ytdlp() + ["-q", "--no-warnings", "-f", "bv*[height<=360]+ba/b[height<=360]/wv*+ba/w",
-                               "--merge-output-format", "mp4", "-o", str(work / "full_video.%(ext)s"), url], check=True)
+    _ytdlp_run(["-q", "--no-warnings", "-f", "bv*[height<=360]+ba/b[height<=360]/wv*+ba/w",
+                "--merge-output-format", "mp4", *_dl_flags(), "-o", str(work / "full_video.%(ext)s"), url])
     return str(next(work.glob("full_video.*")))
 
 
