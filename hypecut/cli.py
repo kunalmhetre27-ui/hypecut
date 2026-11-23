@@ -61,6 +61,19 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--sync-offset", type=float, default=d.sync_offset, help="seconds to add to chat times")
     g.add_argument("--buffer-minutes", type=float, default=d.buffer_minutes)
     g.add_argument("--keep-buffer", action="store_true")
+    g = p.add_argument_group("YouTube auto-upload")
+    g.add_argument("--youtube-upload", dest="youtube_upload", action="store_true",
+                   help="upload the finished clips to YouTube (needs OAuth credentials, see youtube.py)")
+    g.add_argument("--youtube-visibility", dest="youtube_visibility", default=d.youtube_visibility,
+                   choices=["private", "unlisted", "public"], help="privacy of the uploads (default: unlisted)")
+    g.add_argument("--youtube-category", dest="youtube_category", default=d.youtube_category,
+                   help="YouTube category id (default: 20 = Gaming)")
+    g.add_argument("--youtube-schedule", dest="youtube_schedule", action="store_true",
+                   help="upload as scheduled at your chosen best times (see --youtube-slots) instead of posting instantly")
+    g.add_argument("--youtube-slots", dest="youtube_slots", default=d.youtube_slots,
+                   help="comma-separated local post times, e.g. '12:00,15:00,18:00,21:30'")
+    g.add_argument("--youtube-min-gap", dest="youtube_min_gap", type=int, default=d.youtube_min_gap,
+                   help="minutes between two scheduled uploads (default: 45)")
     return p
 
 
@@ -244,6 +257,13 @@ def _main(argv=None) -> int:
     clips = run(spikes, resolve, msgs, out, s, render=not args.dry_run, all_words=all_words)
     if not args.dry_run and not args.demo:
         remember(key, [(c["stream_start"], c["stream_end"]) for c in clips])
+    if not args.dry_run and s.youtube_upload and clips:
+        from .youtube import upload_new_clips
+        results = upload_new_clips(out, visibility=s.youtube_visibility, category=s.youtube_category,
+                                   schedule=s.youtube_schedule, slots=s.youtube_slots,
+                                   min_gap=s.youtube_min_gap)
+        ok = sum(1 for r in results if r.get("ok"))
+        print(f"[youtube] uploaded {ok}/{len(results)} clip(s) to YouTube")
     print(f"\nDone: {len(clips)} clip(s) in {out.resolve()}  (see index.md)")
     return 0
 
@@ -304,6 +324,11 @@ def live_loop(url: str, out: Path, s: Settings, dry_run: bool) -> int:
                 print(f"\n[live] SPIKE at {sp.peak:.0f}s (z={sp.z:.1f}) -> clipping")
                 src, off = buf.cut(sp.start, sp.end, work / f"live_{n:03d}.ts")
                 run([sp], lambda _sp, src=src, off=off: (src, off), msgs, out / f"live_{n:03d}", s, render=not dry_run)
+                if s.youtube_upload:
+                    from .youtube import upload_new_clips
+                    upload_new_clips(out / f"live_{n:03d}", visibility=s.youtube_visibility, category=s.youtube_category,
+                                     schedule=s.youtube_schedule, slots=s.youtube_slots,
+                                     min_gap=s.youtube_min_gap)
                 if n >= s.max_clips:
                     print(f"\n[live] made {n} clips (the limit for this run). Stopping.")
                     return 0

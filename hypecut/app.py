@@ -30,7 +30,11 @@ DEFAULT_OUT = Path.home() / "Desktop" / "HypeCut clips" if (Path.home() / "Deskt
 def load_config() -> dict:
     cfg = {"gemini_key": "", "out_dir": str(DEFAULT_OUT), "whisper_model": "base", "whisper_cpp": "",
            "whisper_cpp_model": "", "language": "", "max_clips": 6, "max_clip": 30, "z": 3.0,
-           "caption_style": "bold", "layout": "auto", "hinglish": False, "effects": True}
+           "caption_style": "bold", "layout": "auto", "hinglish": False, "effects": True,
+           "youtube_client_id": "", "youtube_client_secret": "", "youtube_visibility": "public",
+           "youtube_category": "20", "youtube_auto_upload": True,
+           "youtube_schedule": True, "youtube_slots": "12:00,15:00,18:00,21:30",
+           "youtube_min_gap": 45}
     try:
         cfg.update(json.loads(CONFIG.read_text(encoding="utf-8-sig")))
     except (OSError, ValueError):
@@ -53,6 +57,10 @@ def public_config(cfg: dict) -> dict:
     k = c.pop("gemini_key", "")
     c["gemini_set"] = bool(k)
     c["gemini_hint"] = (k[:4] + "..." + k[-4:]) if len(k) > 10 else ""
+    c["youtube_client_secret"] = ""  # never send secrets to the web view
+    c["youtube_secret_set"] = bool(cfg.get("youtube_client_secret"))
+    cid = c.get("youtube_client_id", "")
+    c["youtube_client_hint"] = (cid[:4] + "..." + cid[-4:]) if len(cid) > 10 else ""
     return c
 
 
@@ -88,8 +96,33 @@ class Job:
             pass
         if self.status == "stopping":
             self.status = "stopped"
+        elif code == 0:
+            self.status = "done"
+            # auto-upload to YouTube when the setting is on and we're connected
+            try:
+                cfg = load_config()
+                if cfg.get("youtube_auto_upload"):
+                    from . import youtube
+                    if not youtube.is_connected():
+                        self.log.append("[youtube] auto-upload is ON but YouTube is not connected (Settings -> YouTube -> Connect)")
+                    else:
+                        def _upload_all():
+                            try:
+                                r = youtube.upload_new_clips(self.out,
+                                                             visibility=cfg.get("youtube_visibility", "public"),
+                                                             category=cfg.get("youtube_category", "20"),
+                                                             schedule=bool(cfg.get("youtube_schedule")),
+                                                             slots=cfg.get("youtube_slots", ""),
+                                                             min_gap=int(cfg.get("youtube_min_gap") or 45),
+                                                             log=self.log)
+                                self.log.append(f"[youtube] uploaded {sum(1 for x in r if x.get('ok'))}/{len(r)} clip(s)")
+                            except Exception as e:  # noqa: BLE001
+                                self.log.append(f"[youtube] auto-upload failed: {e}")
+                        threading.Thread(target=_upload_all, daemon=True).start()
+            except Exception:  # noqa: BLE001
+                pass
         else:
-            self.status = "done" if code == 0 else "error"
+            self.status = "error"
 
     def stop(self):
         if self.status == "running":
@@ -318,7 +351,8 @@ def list_clips() -> list[dict]:
                       "title": c.get("title"), "hook": c.get("hook"), "caption": c.get("caption", ""),
                       "hashtags": c.get("hashtags", []), "viral": c.get("viral_score"), "z": c.get("z"),
                       "duration": c.get("duration"), "transcript": c.get("transcript", ""),
-                      "flow": c.get("flow_prompt", ""), "mtime": mp4.stat().st_mtime})
+                      "flow": c.get("flow_prompt", ""), "youtube": c.get("youtube"),
+                      "mtime": mp4.stat().st_mtime})
     clips.sort(key=lambda c: (-c["mtime"], -(c["viral"] or 0)))
     return clips
 
@@ -327,6 +361,14 @@ def list_clips() -> list[dict]:
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # quiet
         pass
+
+    def _reqlog(self, note: str = ""):
+        """Append every request to ~/.hypecut/requests.log for debugging."""
+        try:
+            with open(HOME / "requests.log", "a", encoding="utf-8") as f:
+                f.write(f"{time.time():.0f} {self.command} {self.path} -> {note}\n")
+        except Exception:  # noqa: BLE001
+            pass
 
     def _json(self, obj, code=200):
         body = json.dumps(obj).encode()
@@ -339,6 +381,14 @@ class Handler(BaseHTTPRequestHandler):
     def _body(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n) or b"{}")
+
+    def _html(self, text: str, code: int = 200):
+        body = text.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _file(self, path: Path):
         if not path.is_file():
@@ -375,11 +425,34 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         p = u.path
+        self._reqlog()
         if p in ("/", "/index.html"):
             return self._file(WEB / "index.html")
         if p.startswith("/static/"):
             f = (WEB / p[8:]).resolve()
             return self._file(f) if WEB.resolve() in f.parents else self._json({}, 404)
+        if p == "/oauth2callback":  # Google redirects here after the OAuth consent
+            from . import youtube
+
+            q = urllib.parse.parse_qs(u.query)
+            err = q.get("error", [""])[0]
+            if err:
+                return self._html(f"<h2>Authorization failed ({err})</h2><p>Close this tab and try again.</p>")
+            code = q.get("code", [""])[0]
+            state = q.get("state", [""])[0]
+            try:
+                youtube.finish_connect(code, state)
+                html = ("<body style='font-family:system-ui;background:#0b0b0d;color:#fff;"
+                        "display:grid;place-items:center;height:100vh'>"
+                        "<div style='text-align:center'><h2 style='color:#3ddc97'>✓ Connected to YouTube!</h2>"
+                        "<p>You can close this tab and go back to HypeCut.</p></div></body>")
+            except Exception as e:  # noqa: BLE001
+                html = f"<h2>Connection failed</h2><p>{e}</p>"
+            return self._html(html)
+        if p == "/api/youtube/status":
+            from . import youtube
+
+            return self._json(youtube.status())
         if p == "/api/state":
             from . import control
 
@@ -400,6 +473,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p = urllib.parse.urlparse(self.path).path
+        self._reqlog()
         try:
             if p == "/api/run":
                 return self._json(start_job(self._body()).as_dict())
@@ -411,13 +485,79 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/config":
                 cfg = load_config()
                 new = self._body()
+                # allow pasting the whole client_secret_*.json (Google's downloaded file) into
+                # either YouTube field: parse it and fill both values
+                for f in ("youtube_client_id", "youtube_client_secret"):
+                    v = new.get(f, "")
+                    if isinstance(v, str) and v.strip().startswith("{") and "client_secret" in v:
+                        try:
+                            j = json.loads(v)
+                            inst = j.get("installed") or j
+                            if inst.get("client_id"):
+                                new["youtube_client_id"] = inst["client_id"]
+                            if inst.get("client_secret"):
+                                new["youtube_client_secret"] = inst["client_secret"]
+                        except ValueError:
+                            pass
                 for k, v in new.items():
                     if k == "gemini_key" and v == "__keep__":
                         continue
                     if k in cfg:
                         cfg[k] = v
                 save_config(cfg)
+                if "youtube_client_id" in new or "youtube_client_secret" in new:
+                    from . import youtube
+
+                    youtube.save_client_creds(cfg.get("youtube_client_id", ""),
+                                             cfg.get("youtube_client_secret", ""))
                 return self._json(public_config(cfg))
+            if p == "/api/youtube/connect":
+                from . import youtube
+
+                cfg = load_config()
+                if not cfg.get("youtube_client_id") or not cfg.get("youtube_client_secret"):
+                    self._reqlog("connect: missing creds")
+                    return self._json({"error": "Set your Google OAuth client ID and secret in Settings -> YouTube first."}, 400)
+                try:
+                    url, state = youtube.start_connect(self.server.server_address[1])
+                except Exception as e:  # noqa: BLE001
+                    self._reqlog(f"connect: start_connect failed: {e}")
+                    raise
+                # open the system browser from the server: popup blockers in the app window
+                # can silently swallow window.open(), which users read as "nothing happened"
+                import threading as _t
+
+                import webbrowser as _wb
+
+                _t.Thread(target=lambda: _wb.open(url), daemon=True).start()
+                self._reqlog(f"connect: ok state={state[:8]}")
+                return self._json({"url": url, "state": state})
+            if p == "/api/youtube/logout":
+                from . import youtube
+
+                youtube.logout()
+                return self._json({"ok": True})
+            if p == "/api/youtube/upload":
+                from . import youtube
+
+                cfg = load_config()
+                b = self._body()
+                rel = b.get("rel", "")
+                root = Path(load_config()["out_dir"]).resolve()
+                mp4 = (root / rel).resolve()
+                if root not in mp4.parents or mp4.suffix != ".mp4" or not mp4.name.startswith("clip_"):
+                    raise ValueError("not a HypeCut clip")
+                js = mp4.with_suffix(".json")
+                clip = json.loads(js.read_text(encoding="utf-8")) if js.exists() else {"id": mp4.stem, "title": mp4.stem}
+                info = youtube.upload_clip(clip, mp4,
+                                           visibility=cfg.get("youtube_visibility", "public"),
+                                           category=cfg.get("youtube_category", "20"),
+                                           schedule=bool(cfg.get("youtube_schedule")),
+                                           slots=cfg.get("youtube_slots", ""),
+                                           min_gap=int(cfg.get("youtube_min_gap") or 45))
+                if js.exists():
+                    youtube.mark_uploaded(js, info)
+                return self._json({"youtube": info})
             if p == "/api/open":
                 raw = self._body().get("path") or ""
                 root = Path(load_config()["out_dir"])

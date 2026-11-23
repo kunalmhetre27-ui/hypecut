@@ -286,6 +286,28 @@ a{color:var(--cyan)}
         </details>
         <button class="btn primary block" onclick="saveSettings()">Save settings</button>
       </div>
+      <div class="card">
+        <h2>YouTube auto-upload</h2>
+        <div class="sub">Automatically upload finished clips to YouTube Shorts with their Gemini title, caption and hashtags. Needs a free Google Cloud OAuth client — steps in the README.</div>
+        <label class="f">Google OAuth client ID</label>
+        <input id="ytCid" type="text" placeholder="1234….apps.googleusercontent.com">
+        <label class="f">Client secret</label>
+        <input id="ytCsec" type="password" placeholder="GOCSPX-…">
+        <div class="hint" style="margin-top:4px">Ya to dono values alag-alag, ya <b>poora client_secret_*.json file ka content</b> (jo Google ne download karvaya) kisi bhi ek field mein paste karo — dono chalega.</div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn white" onclick="ytConnect()">🔗 Connect YouTube</button>
+          <button class="btn danger" onclick="ytLogout()">Disconnect</button>
+        </div>
+        <div class="hint" id="ytHint">Not connected.</div>
+        <label class="check"><input id="ytAuto" type="checkbox"> Auto-upload to YouTube after every run</label>
+        <label class="check"><input id="ytSch" type="checkbox"> 📅 Schedule Shorts for best reach (post at peak times, not instantly)</label>
+        <div class="opts">
+          <div><label class="f">Visibility (when not scheduled)</label><select id="ytVis"><option value="unlisted">Unlisted</option><option value="private">Private</option><option value="public">Public</option></select></div>
+          <div><label class="f">Category ID</label><input id="ytCat" type="text" placeholder="20 (Gaming)"></div>
+          <div><label class="f">Post times (local, 24h)</label><input id="ytSlots" type="text" placeholder="12:00,15:00,18:00,21:30"></div>
+          <div><label class="f">Min gap between posts (min)</label><input id="ytGap" type="number" min="15" step="5" value="45"></div>
+        </div>
+      </div>
     </div>
   </section>
   <!-- DEVELOPER (owner's laptop only) -->
@@ -467,6 +489,7 @@ function renderClips(){
           <button class="btn sm white" onclick="copyCap(${clips.indexOf(c)})">Copy caption + hashtags</button>
           <a class="btn sm" href="/clips/${encodeURI(c.rel)}" download style="text-decoration:none">Download</a>
           ${c.flow?`<button class="btn sm" onclick="copyFlow(${clips.indexOf(c)})">Flow prompt</button>`:''}
+          ${c.youtube && c.youtube.url ? `<a class="btn sm" href="${c.youtube.url}" target="_blank" style="text-decoration:none" title="${c.youtube.publish_at ? 'Scheduled ' + new Date(c.youtube.publish_at).toLocaleString() : 'Uploaded ' + new Date(c.youtube.uploaded_at*1000).toLocaleString()}">${c.youtube.visibility==='scheduled'?'📅':''} ▶</a>` : `<button class="btn sm" onclick="ytUploadClip(${clips.indexOf(c)})">⬆ YouTube</button>`}
           <button class="btn sm danger" title="Delete clip" onclick="delClip(${clips.indexOf(c)})">🗑 Delete</button>
         </div>
       </div>
@@ -500,6 +523,14 @@ function renderCfg(c){
   const p=$('#gemPill'); p.classList.toggle('ok',c.gemini_set); p.lastElementChild.textContent=c.gemini_set?'Gemini on':'Gemini off';
   $('#tAi').textContent = c.gemini_set ? 'Gemini AI' : 'Built-in (free)';
   $('#keyHint').textContent = c.gemini_set ? `Key saved (${c.gemini_hint}). Saved only on this computer.` : 'No key saved. Clips still work with offline hooks and captions.';
+  $('#ytCid').value = c.youtube_client_id || '';
+  $('#ytCsec').value = '';
+  $('#ytAuto').checked = !!c.youtube_auto_upload;
+  $('#ytSch').checked = c.youtube_schedule !== false;
+  $('#ytVis').value = c.youtube_visibility || 'public';
+  $('#ytCat').value = c.youtube_category || '20';
+  $('#ytSlots').value = c.youtube_slots || '12:00,15:00,18:00,21:30';
+  $('#ytGap').value = c.youtube_min_gap || 45;
 }
 function renderAccount(a){
   if(!a) return;
@@ -604,17 +635,75 @@ async function init(){
   $('#oMax').value=c.max_clips; $('#oLen').value=c.max_clip; $('#oZ').value=c.z; $('#zLbl').textContent=(+c.z).toFixed(1);
   $('#oLang').value=c.language||''; $('#oCap').value=c.caption_style; $('#oLay').value=c.layout; $('#oHing').checked=!!c.hinglish; $('#oFx').checked=c.effects!==false;
   $('#sOut').value=c.out_dir; $('#sModel').value=c.whisper_model||'base'; $('#sCpp').value=c.whisper_cpp||''; $('#sCppM').value=c.whisper_cpp_model||'';
+  updateYtStatus();
   renderJobs(s.jobs); loadClips();
   setInterval(refresh, 1500);
 }
 async function saveKey(){const k=$('#sKey').value.trim(); if(!k) return toast('Paste a key first'); renderCfg(await api('/api/config',{gemini_key:k})); $('#sKey').value=''; toast('Gemini key saved');}
 async function removeKey(){renderCfg(await api('/api/config',{gemini_key:''})); toast('Gemini key removed');}
+function youtubeCreds(){
+  // Accept EITHER the two separate values OR the whole client_secret_*.json pasted into one field.
+  let cid = $('#ytCid').value.trim(), sec = $('#ytCsec').value.trim();
+  for (const v of [cid, sec]) {
+    if (v.startsWith('{')) {
+      try {
+        const j = JSON.parse(v), inst = j.installed || j;
+        if (inst.client_id) cid = inst.client_id;
+        if (inst.client_secret) sec = inst.client_secret;
+      } catch(e) {}
+    }
+  }
+  return {cid, sec};
+}
 async function saveSettings(){
-  renderCfg(await api('/api/config',{out_dir:$('#sOut').value.trim(), whisper_model:$('#sModel').value,
+  const {cid, sec} = youtubeCreds();
+  const body = {out_dir:$('#sOut').value.trim(), whisper_model:$('#sModel').value,
     whisper_cpp:$('#sCpp').value.trim(), whisper_cpp_model:$('#sCppM').value.trim(),
     max_clips:+$('#oMax').value, max_clip:+$('#oLen').value, z:+$('#oZ').value, language:$('#oLang').value,
-    caption_style:$('#oCap').value, layout:$('#oLay').value, hinglish:$('#oHing').checked, effects:$('#oFx').checked}));
+    caption_style:$('#oCap').value, layout:$('#oLay').value, hinglish:$('#oHing').checked, effects:$('#oFx').checked,
+    youtube_client_id:cid, youtube_visibility:$('#ytVis').value,
+    youtube_category:$('#ytCat').value.trim()||'20', youtube_auto_upload:$('#ytAuto').checked,
+    youtube_schedule:$('#ytSch').checked, youtube_slots:$('#ytSlots').value.trim(),
+    youtube_min_gap:+$('#ytGap').value || 45};
+  if(sec) body.youtube_client_secret = sec;
+  renderCfg(await api('/api/config', body));
   toast('Settings saved'); loadClips();
+}
+async function updateYtStatus(){
+  try{
+    const s = await api('/api/youtube/status');
+    $('#ytHint').textContent = s.connected ? ('Connected as ' + (s.channel || 'your channel') + (s.client_hint ? '  (' + s.client_hint + ')' : ''))
+      : (s.configured ? 'Saved client — press Connect to sign in with Google.' : 'No OAuth client saved yet.');
+  }catch(e){}
+}
+async function ytConnect(){
+  const {cid: id, sec} = youtubeCreds();
+  if(!id || !sec) return toast('Paste your OAuth client ID and secret first (ya poora client_secret_*.json file content, kisi bhi field mein)');
+  const body = {youtube_client_id:id, youtube_visibility:$('#ytVis').value,
+    youtube_category:$('#ytCat').value.trim()||'20', youtube_auto_upload:$('#ytAuto').checked};
+  body.youtube_client_secret = sec;
+  try{
+    await api('/api/config', body);
+    const r = await api('/api/youtube/connect');
+    try { const w = window.open(r.url, '_blank'); if(!w) throw 0; } catch(e) {
+      $('#ytHint').innerHTML = 'Browser khud nahi khula? Is link ko manually kholo: <a href="' + r.url + '" target="_blank">Google sign-in</a>';
+    }
+    toast('Opened Google sign-in in your browser…');
+    setTimeout(updateYtStatus, 2000);
+  }catch(e){
+    toast(e.message);
+    $('#ytHint').textContent = 'Error: ' + e.message + '. Agar "not found" dikhe toh app ko band karke dobara kholo (Restart).';
+  }
+}
+async function ytLogout(){
+  if(!confirm('Disconnect YouTube? Clips won\'t auto-upload until you connect again.')) return;
+  try{ await api('/api/youtube/logout'); toast('Disconnected'); updateYtStatus(); }catch(e){ toast(e.message); }
+}
+async function ytUploadClip(i){
+  const c = clips[i];
+  if(!confirm('Upload "' + (c.title||c.id) + '" to YouTube? Visibility comes from Settings.')) return;
+  try{ await api('/api/youtube/upload', {rel:c.rel}); toast('Uploaded to YouTube ✓'); loadClips(); }
+  catch(e){ toast(e.message); }
 }
 init();
 </script>

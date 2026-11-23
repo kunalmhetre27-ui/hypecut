@@ -5,7 +5,7 @@ description = "Clip the moments where stream chat explodes: chat spikes -> Whisp
 readme = "README.md"
 license = { text = "LicenseRef-HypeCut-Source-Available" }
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24", "faster-whisper>=1.0", "yt-dlp>=2024.1.1", "pywebview>=5.0", "opencv-python-headless>=4.8,<5", "chat-downloader>=0.2.8", "streamlink>=6.0"]
+dependencies = ["numpy>=1.24", "faster-whisper>=1.0", "yt-dlp>=2024.1.1", "pywebview>=5.0", "opencv-python-headless>=4.8,<5", "chat-downloader>=0.2.8", "streamlink>=6.0", "google-api-python-client>=2.120", "google-auth-oauthlib>=1.2", "google-auth-httplib2>=0.2"]
 
 [project.optional-dependencies]
 live = ["streamlink>=6.0", "chat-downloader>=0.2.8"]
